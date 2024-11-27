@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hello OpenCV.js</title>
+<style>
+.trans_vec {border:1px solid}
+.vid {position:absolute;left:0px;top:0px;width:320px;height:180px}
+.canv3d {position:absolute;left:0px;top:0px;width:320px;height:180px;pointer-events:none}
+.start {position:absolute;left:400px;top:0px;background:gray; color:white;padding:10px}
+.stop {position:absolute;left:450px;top:0px;background:gray; color:white;padding:10px}
+.info {position:absolute;left:500px;top:470px;}
+.or {position:absolute;left:500px;top:0px;}
+</style>
+<script type="importmap">
+	{
+		"imports": {
+			"three": "./lib/three.module.min.js",
+			"three/addons/": "./lib/addons/"
+		}
+	}
+</script>
+<script type="module">if(/debug_mode=true/.test(document.cookie)) (async () => window.debug_m = await import('/debug_m/debug_m.js'))()</script>
+<script async src="lib/esshim.js"></script>
+<script type="module" src="sensorar4.js"></script>
+</head>
+<body>
+<h2>Hello OpenCV.js</h2>
+<p id="status">OpenCV.js is loading...</p>
+<a href="#" class="start knopka">Start</a>
+<a href="#" class="stop knopka">Stop</a>
+<div class="or">or=<span>0</span></div>
+<div class="info">info=<span>0</span></div>
+<div>
+  <div class="inputoutput">
+	<!--video class="vid" src="VID_20240124_133109.mp4" width="320" height="180" controls></video-->
+	<!--video class="vid" src="VID_20240212_155211.mp4" width="320" height="180" controls></video-->
+	<!--video class="vid" src="VID_20240212_160317.mp4" width="320" height="180" controls></video-->
+	<!--video class="vid" src="VID_20240212_161341.mp4" width="320" height="180" controls></video-->
+	<!--video class="vid" src="RecordRTC-2024215-5g7uy9j8sxg.mp4.webm" width="320" height="180" controls></video-->
+	<!--video class="vid" src="RecordRTC-2024215-glov57yzuo.mp4.webm" width="320" height="180" controls></video-->
+	<video class="vid" src="RecordRTC-2024122-9ok7plqjrsb.mp4.webm" width="320" height="180" controls></video>
+    <canvas class="canv"></canvas>
+    <canvas class="canv2"></canvas>
+	<canvas class="trans_vec" width="200" height="200"></canvas>
+  </div>
+  <div class="fps">FPS=<span>0</span></div>
+  <div class="rot">ROT=<span>0</span></div>
+  <div class="trans">trans=<span>0</span></div>
+</div>
+<a href="#" class="test knopka">Test</a>
+<script type="text/javascript">
+let vid;
+let canv, ctx;
+let canv2, ctx2;
+let mat, mat0, mat1, fast, kp, point, p0, p1, status, err, size, size_1, s_size, termcrit, kp0, kp1,
+	desc, desc0, desc1, mask_orb, orb, dmv, bf, im, pp0, pp1, E, R, R0inv, R2, R3, R4, R64, Rvec, Rvec64, t, t64, dist0, dist1,
+	r0, t0, ir0, it0, pr0, r1, t1, ir1, it1, pr1, trp0, trp1, ps3d, ps4d, mask,
+	kadri, ka_i, rlof_p, tposi, tposi_i, mir_mat, to0, to1, ts, zvet;
+let quat;
+let quat2;
+let eul;
+let tochki = [];
+let ntochki = [];
+let tochki_kol = 0;
+let est_posa = false;
+//const mw = 640, mh = 360;
+const mw = 320, mh = 180;
+//const mw = 160, mh = 90;
+let is;
+let perv = true, ostan = false;
+let tv_canv, tv_ctx;
+let kadr = 0;
+let sens_data = [];
+
+const _$ = (q, elm) => (elm ? elm : document).querySelector(q);
+const _$$ = (q, elm) => (elm ? elm : document).querySelectorAll(q);
+window._$ = _$;
+window._$$ = _$$;
+
+let sens_razr = false;
+
+async function loaded() {
+	vid = _$('.vid');
+	_$('.stop').addEventListener('click', stop);
+	_$('.test').addEventListener('click', test);
+	_$('.start').addEventListener('click', start);
+	
+	if(vid.readyState >= HTMLMediaElement.HAVE_METADATA) {
+		start();
+	} else {
+		vid.addEventListener('loadedmetadata', start);
+	}
+/*	const cons = {
+		video: {facingMode: 'environment', width: 640, height: 360}
+//					video: {facingMode: 'environment', width: 1280, height: 720}
+	};
+	const stream = await navigator.mediaDevices.getUserMedia(cons);
+	vid.srcObject = stream;
+*/
+	if(typeof( DeviceOrientationEvent.requestPermission ) === "function") {
+		window.addEventListener('click', razr_sensor);
+	};
+	window.addEventListener('deviceorientation', on_orient);
+}
+
+async function razr_sensor(evt) {
+	if(sens_razr)
+		return;
+	sens_razr = true;
+	if (DeviceOrientationEvent.permission !== 'granted') {
+		await DeviceOrientationEvent.requestPermission();
+		console.log('sensor ok');
+	}
+}
+
+function on_orient(or) {
+	if(!on_orient.ok) {
+		on_orient.ok = true;
+		console.log('sensor start');
+	};
+	window.alpha = or.alpha;
+	window.beta = or.beta;
+	window.gamma = or.gamma;
+	_$('.or span').innerHTML = window.alpha.toFixed(1) + ';' + window.beta.toFixed(1) + ';' + window.gamma.toFixed(1);
+}
+
+function imgdata(mat) {
+    if (!(mat instanceof cv.Mat)) {
+        throw new Error('Please input the valid cv.Mat instance.');
+        return;
+    }
+
+    // convert the mat type to cv.CV_8U
+    var img = new cv.Mat();
+    var depth = mat.type()%8;
+    var scale = depth <= cv.CV_8S? 1.0 : (depth <= cv.CV_32S? 1.0/256.0 : 255.0);
+    var shift = (depth === cv.CV_8S || depth === cv.CV_16S)? 128.0 : 0.0;
+    mat.convertTo(img, cv.CV_8U, scale, shift);
+
+    // convert the img type to cv.CV_8UC4
+    switch (img.type()) {
+        case cv.CV_8UC1:
+            cv.cvtColor(img, img, cv.COLOR_GRAY2RGBA);
+            break;
+        case cv.CV_8UC3:
+            cv.cvtColor(img, img, cv.COLOR_RGB2RGBA);
+            break;
+        case cv.CV_8UC4:
+            break;
+        default:
+            throw new Error('Bad number of channels (Source image must have 1, 3 or 4 channels)');
+            return;
+    }
+    const id =  new ImageData(new Uint8ClampedArray(img.data), img.cols, img.rows);
+	img.delete();
+	return id;
+}
+
+async function load_sensor_data() {
+//	sens_data = JSON.parse(await (await fetch('or_data (14).json')).text());
+//	sens_data = JSON.parse(await (await fetch('or_data (12).json')).text());
+	sens_data = JSON.parse(await (await fetch('or_data (5).json')).text());
+//	console.log('sens_data', sens_data);
+}
+
+function get_orient(t) {
+	let i = 0;
+	for(; i < sens_data.length && t > sens_data[i].t; i++);
+	return {alpha: sens_data[i].a, beta: sens_data[i].b, gamma: sens_data[i].g};
+//	return {alpha: window.alpha, beta: window.beta, gamma: window.gamma};
+}
+
+function calc_cv_mat(or) {
+	const so = 'landscape_left'; //getScreenOrientation();
+	let ug = 0;
+
+	if( so === 'landscape_left' ) {
+		ug = 90;
+	} else if(so === 'landscape_right' ) {
+		ug = 270;
+	};
+//	_$('.ugli').innerHTML = 'alpha:' + Math.round(or.alpha) + '; beta:' + Math.round(or.beta) + '; gamma:' + Math.round(or.gamma) + '; so:' + so + '; ug:' + ug;
+//	console.log('ugli', Math.round(or.alpha), Math.round(or.beta), Math.round(or.gamma));
+
+	eul.set(0, 0, THREE.MathUtils.degToRad(ug), 'ZXY');
+	quat.setFromEuler(eul);
+	eul.set(THREE.MathUtils.degToRad(or.beta), THREE.MathUtils.degToRad(or.gamma), THREE.MathUtils.degToRad(or.alpha), 'ZXY');
+	quat2.setFromEuler(eul).conjugate();
+	quat.multiply(quat2);
+	mir_mat.makeRotationFromQuaternion(quat);
+	R.floatPtr(0, 0)[0] = mir_mat.elements[0]; R.floatPtr(0, 1)[0] = mir_mat.elements[4];  R.floatPtr(0, 2)[0] = mir_mat.elements[8];
+	R.floatPtr(1, 0)[0] = -mir_mat.elements[1]; R.floatPtr(1, 1)[0] = -mir_mat.elements[5];  R.floatPtr(1, 2)[0] = -mir_mat.elements[9];
+	R.floatPtr(2, 0)[0] = -mir_mat.elements[2]; R.floatPtr(2, 1)[0] = -mir_mat.elements[6];  R.floatPtr(2, 2)[0] = -mir_mat.elements[10];
+}
+
+async function start(evt) {
+	evt.preventDefault();
+	vid.currentTime = 0;
+	vid.play();
+	ostan = false;
+	est_posa = false;
+
+	await load_sensor_data();
+
+	canv = _$('.canv');
+	canv.width = mw;
+	canv.height = mh;
+	ctx = canv.getContext('2d');
+	canv2 = _$('.canv2');
+	canv2.width = mw;
+	canv2.height = mh * 2;
+	ctx2 = canv2.getContext('2d');
+	mat = new cv.Mat(mh, mw, cv.CV_8UC4);
+	mat0 = new cv.Mat(mh, mw, cv.CV_8UC1);
+	mat1 = new cv.Mat(mh, mw, cv.CV_8UC1);
+//	mat0 = new cv.Mat(mh, mw, cv.CV_8UC4);
+//	mat1 = new cv.Mat(mh, mw, cv.CV_8UC4);
+	point = new cv.Mat(1, 1, cv.CV_32FC2);
+	p0 = new cv.Mat(1, 1, cv.CV_32FC2);
+	p1 = new cv.Mat(1, 1, cv.CV_32FC2);
+	fast = cv.get_det(20);
+	kp = new cv.KeyPointVector();
+	kp_ = new cv.KeyPointVector();
+	status = new cv.Mat();
+	err = new cv.Mat();
+	
+	kadri = new Array(10);
+	for(let i = 0; i < kadri.length; i++) {
+		const k = {tochki: []};
+//		k.mat = new cv.Mat(mh, mw, cv.CV_8UC3);
+		k.mat = new cv.Mat(mh, mw, cv.CV_8UC1);
+		k.p = new cv.Mat(0, 1, cv.CV_32FC2);
+		kadri[i] = k;
+	};
+	ka_i = 0;
+	tposi = new Array(10);
+	for(let i = 0; i < tposi.length; i++) {
+		tposi[i] = null;
+	};
+	tposi_i = 0;
+	
+	dmv = new cv.DMatchVector();
+	bf = new cv.BFMatcher();
+	kp0 = new cv.KeyPointVector();
+	kp1 = new cv.KeyPointVector();
+	desc = new cv.Mat();
+	desc0 = new cv.Mat();
+	desc1 = new cv.Mat();
+	mask_orb = new cv.Mat();
+	orb = new cv.ORB();
+	orb.setNLevels(8);
+	rlof_p = new cv.optflow_RLOFOpticalFlowParameter();
+	rlof_p.setMaxIteration(1);
+	rlof_p.setSupportRegionType(0);
+	
+	size_1 = new cv.Size(-1, -1);
+	s_size = new cv.Size(10, 10);
+	size = new cv.Size(31, 31);
+//	size = new cv.Size(51, 51);
+//	size = new cv.Size(10, 10);
+//	size = new cv.Size(5, 5);
+	termcrit = new cv.TermCriteria(cv.TermCriteria_COUNT + cv.TermCriteria_EPS, 20, 0.03);
+//	termcrit = new cv.TermCriteria(cv.TermCriteria_COUNT + cv.TermCriteria_EPS, 40, 0.03);
+	pp0 = new cv.Mat(1, 1, cv.CV_32FC2);
+	pp1 = new cv.Mat(1, 1, cv.CV_32FC2);
+	const f = 0.8;
+//	const flx = mw * f;
+//	const fly = mw * f; //mh * f;
+	const flx = 294.56676194329174;
+	const fly = 294.376272689153;
+	const cx = 161.7743952084133;
+	const cy = 87.11343338347179;
+	im = new cv.Mat(3, 3, cv.CV_32FC1);
+	im.floatPtr(0, 0)[0] = flx; im.floatPtr(0, 1)[0] = 0; im.floatPtr(0, 2)[0] = cx; 
+	im.floatPtr(1, 0)[0] = 0; im.floatPtr(1, 1)[0] = fly; im.floatPtr(1, 2)[0] = cy; 
+	im.floatPtr(2, 0)[0] = 0; im.floatPtr(2, 1)[0] = 0; im.floatPtr(2, 2)[0] = 1;
+	E = new cv.Mat();
+	R = new cv.Mat(3, 3, cv.CV_32FC1);
+	R0inv = new cv.Mat(3, 3, cv.CV_32FC1);
+	R2 = new cv.Mat(4, 4, cv.CV_32FC1);
+	R3 = new cv.Mat(4, 4, cv.CV_32FC1);
+	R4 = new cv.Mat(3, 3, cv.CV_32FC1);
+	R64 = new cv.Mat();
+	Rvec = new cv.Mat();
+	Rvec64 = new cv.Mat();
+	t = new cv.Mat(3, 1, cv.CV_32FC1);
+	t64 = new cv.Mat();
+	dist0 = new cv.Mat(1, 5, cv.CV_32FC1);
+	dist0.data32F.set([0.453831619000359, -4.680705011155121, -0.007377753982701174, 0.0007342875783478033, 18.66816056026944]);
+	dist1 = new cv.Mat(1, 5, cv.CV_32FC1);
+	dist1.data32F.set([0.453831619000359, -4.680705011155121, -0.007377753982701174, 0.0007342875783478033, 18.66816056026944]);
+	r0 = new cv.Mat(3, 3, cv.CV_32FC1);
+	r0.floatPtr(0, 0)[0] = 1; r0.floatPtr(0, 1)[0] = 0; r0.floatPtr(0, 2)[0] = 0; 
+	r0.floatPtr(1, 0)[0] = 0; r0.floatPtr(1, 1)[0] = 1; r0.floatPtr(1, 2)[0] = 0; 
+	r0.floatPtr(2, 0)[0] = 0; r0.floatPtr(2, 1)[0] = 0; r0.floatPtr(2, 2)[0] = 1;
+	t0 = new cv.Mat(3, 1, cv.CV_32FC1);
+	t0.floatPtr(0, 0)[0] = 0; t0.floatPtr(0, 1)[0] = 0; t0.floatPtr(0, 2)[0] = 0;
+	
+	mask = new cv.Mat();
+	ir0 = cv.mat_mul(im, r0);
+	it0 = cv.mat_mul(im, t0);
+	pr0 = new cv.Mat(3, 4, cv.CV_32FC1);
+	pr0.floatPtr(0, 0)[0] = ir0.floatPtr(0, 0)[0]; pr0.floatPtr(0, 1)[0] = ir0.floatPtr(0, 1)[0]; pr0.floatPtr(0, 2)[0] = ir0.floatPtr(0, 2)[0]; pr0.floatPtr(0, 3)[0] = it0.floatPtr(0, 0)[0];
+	pr0.floatPtr(1, 0)[0] = ir0.floatPtr(1, 0)[0]; pr0.floatPtr(1, 1)[0] = ir0.floatPtr(1, 1)[0]; pr0.floatPtr(1, 2)[0] = ir0.floatPtr(1, 2)[0]; pr0.floatPtr(1, 3)[0] = it0.floatPtr(1, 0)[0];
+	pr0.floatPtr(2, 0)[0] = ir0.floatPtr(2, 0)[0]; pr0.floatPtr(2, 1)[0] = ir0.floatPtr(2, 1)[0]; pr0.floatPtr(2, 2)[0] = ir0.floatPtr(2, 2)[0]; pr0.floatPtr(2, 3)[0] = it0.floatPtr(2, 0)[0];
+	pr1 = new cv.Mat(3, 4, cv.CV_32FC1);
+//	is = [27, 56, 84];						
+	trp0 = new cv.Mat(1, 1, cv.CV_32FC2);
+	trp1 = new cv.Mat(1, 1, cv.CV_32FC2);
+	ps4d = new cv.Mat(4, 1, cv.CV_32FC1);
+	ps3d = new cv.Mat(1, 1, cv.CV_32FC3);
+	
+	tv_canv = _$('.trans_vec');
+	tv_ctx = tv_canv.getContext('2d');
+
+	quat = new THREE.Quaternion();
+	quat2 = new THREE.Quaternion();
+	eul = new THREE.Euler(0, 0, 0, 'ZXY');
+	mir_mat = new THREE.Matrix4();
+	to0 = new cv.Point();
+	to1 = new cv.Point();
+	zvet = new cv.Scalar();
+	ts = new cv.MatVector();
+	const to = new cv.Mat(4, 2, cv.CV_32S);
+	ts.push_back(to);
+	
+//	vid.requestVideoFrameCallback(anim);
+	window.requestAnimationFrame(anim);
+}
+
+function anim(dmsec) {
+	if(ostan)
+		return;
+		
+	const vid_t = vid.currentTime * 1000;
+	const orient = get_orient(vid_t);
+//	console.log('orient', vid_t, orient);
+//	sensorar.on_orient(orient);
+
+	if(++kadr < 1) {
+		window.requestAnimationFrame(anim);
+		return;
+	};
+	kadr = 0;
+
+	const t_nach = performance.now();
+
+	ctx.drawImage(vid, 0, 0, mw, mh);
+	imd = ctx.getImageData(0, 0, mw, mh);
+	mat.data.set(imd.data);
+//	mat1.data.set(imd.data);
+	
+//	cv.cvtColor(mat, mat1, cv.COLOR_BGR2GRAY);
+
+	let t_tek;
+	
+	if(!perv) {
+
+		const kol_toch = 500;
+
+		let toch = 0;
+		let poteri = 0;
+		let vosst = 0;
+		const k = kadri[ka_i];
+		k.tochki = [];
+		k.p.resize(0);
+		cv.cvtColor(mat, k.mat, cv.COLOR_BGR2GRAY);
+//		cv.cvtColor(mat, k.mat, cv.COLOR_BGRA2BGR);
+		for(let i = 1; i < kadri.length; i++) {
+			let ka0_i = ka_i - i;
+			if(ka0_i < 0) ka0_i = kadri.length - 1;
+			const k0 = kadri[ka0_i];
+			if(k0.tochki.length > 0) {
+//				cv.calcOpticalFlowPyrLK(k0.mat, k.mat, k0.p, p1, status, err, size, 0, termcrit, 0, 0.001);
+				cv.calcOpticalFlowPyrLK(k0.mat, k.mat, k0.p, p1, status, err, size, 0, termcrit, 0, 0.001);
+//				cv.optflow_calcOpticalFlowSparseRLOF(k0.mat, k.mat, k0.p, p1, status, err, rlof_p);
+				let t = [];
+				for(let j = 0; j < status.rows; j++) {
+					let r = p1.row(j);
+					let ostav = status.ucharPtr(j, 0)[0] == 1 && r.floatPtr(0)[0] >= 0 && r.floatPtr(0)[1] >= 0;
+					if(ostav) {
+						k.tochki.push(k0.tochki[j]);
+						k.p.push_back(r);
+						if(i > 1) vosst++;
+					} else {
+						t.push(k0.tochki[j]);
+						k0.p.floatPtr(t.length - 1).set(r);
+						poteri++;
+					};
+					toch++;
+				};
+				k0.tochki = t;
+				k0.p.resize(t.length);
+			};
+		};
+		console.log('toch', toch, poteri, vosst);
+		if(toch < kol_toch * 4 / 5) {
+			orb.setMaxFeatures(kol_toch - toch);
+			orb.detect(k.mat, kp1);
+			const rows0 = k.p.rows;
+			k.p.resize(rows0 + kp1.size());
+			for(let i = 0; i < kp1.size(); i++) {
+				k.p.floatPtr(rows0 + i)[0] = kp1.get(i).pt.x;
+				k.p.floatPtr(rows0 + i)[1] = kp1.get(i).pt.y;
+				k.tochki.push([]);
+			};
+			console.log('orb dobavil', kp1.size());
+		};
+		
+		{
+			const prop = 1;
+			for(let i0 = 0; i0 < Math.floor(k.p.rows / prop); i0++) {
+				const i = i0 * prop;
+				let [x, y] = k.p.row(i).data32F;
+				ctx.fillStyle = 'black';
+				if(typeof(k.tochki[i].koor) != 'undefined') {
+					let r = 0; let g = 0; let b = 0;
+					let koor = k.tochki[i].koor;
+					if(Math.abs(koor.x) > 100 || Math.abs(koor.y) > 100 || Math.abs(koor.z) > 100) {
+						r = 255; g = 255; b = 255;
+					} else if(koor.x >= 0) {
+						r = koor.x / 2 * 255;
+					} else if(koor.x < 0) {
+						b = -koor.x / 5 * 255;
+					};
+					ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+				};
+				ctx.beginPath();
+				ctx.fillRect(x - 1, y - 1, 2, 2);
+			};
+		}
+		
+/*		{
+			let toch_match = 0;
+			let ka0_i = ka_i - i;
+			if(ka0_i < 0) ka0_i = kadri.length - 1;
+			const k0 = kadri[ka0_i];
+			ctx2.putImageData(imgdata(k0.mat), 0, 0);
+			ctx2.putImageData(imgdata(k.mat), 0, mh);
+			const prop = 1;
+			for(let i0 = 0; i0 < Math.floor(k.tochki.length / prop); i0++) {
+				const i = i0 * prop;
+				const t = k.tochki[i];
+				if(t.i0 != -1 && t.i1 != -1) {
+					let p0 = kp0.get(t.i0).pt;
+					let p1 = kp1.get(i).pt;
+					ctx2.strokeStyle = 'white';
+					ctx2.beginPath();
+					ctx2.moveTo(p0.x, p0.y);
+					ctx2.lineTo(p1.x, p1.y + mh);
+					ctx2.stroke();
+					toch_match++;
+				}
+			}
+			console.log('toch_match', toch_match);
+		}
+*/
+//		if(false) {
+		if(!est_posa) {
+			let dobav = true;
+			if(k.tochki.length > 0) {
+				let dsumx = 0;
+				let dsumy = 0;
+				let dkol = 0;
+				for(let i = 0; i < k.tochki.length; i++) {
+					if(k.tochki[i].length > 0) {
+						let [x, y] = k.p.floatPtr(i);
+						dsumx += Math.abs(x - k.tochki[i].at(-1).x);
+						dsumy += Math.abs(y - k.tochki[i].at(-1).y);
+						dkol++;
+					}
+				};
+				dsumx /= dkol;
+				dsumy /= dkol;
+				if(dsumx < 5 || dsumy < 5 || dkol > 0 && dkol < 100) //Минимальное расстояние смещения точек для снимка
+//				if(dsumx < 2 || dsumy < 2 || dkol > 0 && dkol < 100) //Минимальное расстояние смещения точек для снимка
+					dobav = false;
+			};
+			if(dobav) {
+				const m = new cv.Mat();
+				k.mat.copyTo(m);
+				calc_cv_mat(orient);
+				const r = new cv.Mat();
+				R.copyTo(r);
+				for(let i = 0; i < k.tochki.length; i++) {
+					let [x, y] = k.p.floatPtr(i);
+					k.tochki[i].push({x: x, y: y, mat: m, r: r});
+				};
+/*				if(k.tochki[0].length == 1) {
+					cv.invert(R, R0inv);
+				};*/
+				console.log('dobavil snimok', k.tochki[0], r.data32F, R0inv.data32F);
+			};
+			
+			t_tek = performance.now();
+	//		console.log('massiv', t_tek - t_nach_massiv);
+		
+			let tochki_posi = 0;
+			for(let i = 0; i < k.tochki.length; i++) {
+				if(k.tochki[i].length == 2)
+					tochki_posi++;
+			};
+//			console.log('tochki posi', tochki_posi, k.tochki);
+			if(tochki_posi >= 10) {
+				est_posa = true;
+				console.log('tochki posi', tochki_posi, k.tochki);
+			};
+
+//			if(false) {
+			if(est_posa) {
+				mask.resize(0);
+				pp0.resize(tochki_posi);
+				pp1.resize(tochki_posi);
+				{
+					let i2 = 0;
+					for(let i = 0; i < k.tochki.length; i++) {
+						if(k.tochki[i].length == 2) {
+							const p_0 = k.tochki[i][0];
+							const p_1 = k.tochki[i][1];
+							pp0.floatPtr(i2, 0)[0] = k.tochki[i][0].x;
+							pp0.floatPtr(i2, 0)[1] = k.tochki[i][0].y;
+							pp1.floatPtr(i2, 0)[0] = k.tochki[i][1].x;
+							pp1.floatPtr(i2, 0)[1] = k.tochki[i][1].y;
+							k.tochki[i].pose_i = i2;
+							if(i2 == 0) {
+								k.tochki[i][0].r.copyTo(R);
+								cv.invert(R, R0inv);
+								k.tochki[i][1].r.copyTo(R);
+							};
+							i2++;
+						};
+					};
+				};
+//				console.log('pp', pp0.data32F[54], pp0.data32F[55], pp1.data32F[54], pp1.data32F[55]);
+			
+				const t_nach_pose = performance.now();
+				
+				const dist = new cv.Mat(1, 5, cv.CV_32FC1);
+				dist.data32F.set([0, 0, 0, 0, 0]);
+//				cv.recoverPose(pp0, pp1, im, dist0, im, dist1, E, R64, t64, cv.RANSAC, 0.999, 1, mask);
+				cv.recoverPose(pp0, pp1, im, dist, im, dist, E, R64, t64, cv.RANSAC, 0.999, 1, mask);
+				R = cv.mat_mul(R, R0inv);
+				cv.Rodrigues(R, Rvec);
+				console.log('Rvec0', Rvec.data32F, eul_rot(R));
+				calc_pose(pp0, pp1, R, t);
+				console.log('t0', t.data32F);
+				let info = 't0:' + t.data32F.toString() + '<br/>';
+				R64.convertTo(R, cv.CV_32FC1);
+				t64.convertTo(t, cv.CV_32FC1);
+				cv.Rodrigues(R, Rvec);
+				console.log('Rvec1', Rvec.data32F, eul_rot(R));
+				console.log('t', t.data32F);
+				info += 't:' + t.data32F.toString() + '<br/>';
+
+//			calc_cv_mat(orient);
+//				R = cv.mat_mul(R, R0inv);
+//				cv.Rodrigues(R, Rvec);
+//				console.log('Rvec2', Rvec.data32F);
+				const ind = calc_pose(pp0, pp1, R, t);
+				cv.Rodrigues(R, Rvec);
+				console.log('Rvec3', Rvec.data32F);
+				info += 't1:' + t.data32F.toString() + '<br/>'
+				_$('.info span').innerHTML = info;
+
+				t_tek = performance.now();
+				console.log('pose=', t_tek - t_nach_pose, mask.data8S, t.rows, t.data32F);
+		//		console.log('mask', mask.rows);
+
+				{
+					let m0, m1;
+					for(let i = 0; i < k.tochki.length; i++) {
+						if(k.tochki[i].length == 2) {
+							m0 = k.tochki[i][0].mat;
+							m1 = k.tochki[i][1].mat;
+							break;
+						}
+					};
+					ctx2.putImageData(imgdata(m0), 0, 0);
+					ctx2.putImageData(imgdata(m1), 0, mh);
+//					for(let i = 0; i < pp0.rows; i++) {
+					for(let i = 0; i < ind.length; i++) {
+						let p0 = {x: pp0.floatPtr(ind[i], 0)[0], y: pp0.floatPtr(ind[i], 0)[1]};
+						let p1 = {x: pp1.floatPtr(ind[i], 0)[0], y: pp1.floatPtr(ind[i], 0)[1]};
+						ctx2.strokeStyle = 'white';
+						ctx2.beginPath();
+						ctx2.moveTo(p0.x, p0.y);
+						ctx2.lineTo(p1.x, p1.y + mh);
+						ctx2.stroke();
+					}
+//					console.log('toch_pose', pp0.rows);
+				}
+
+				pp0 = pp0.t();
+				pp1 = pp1.t();
+				cv.correctMatches(E, pp0, pp1, p0, p1);
+				pp0 = pp0.t();
+				pp1 = pp1.t();
+				p0 = p0.t();
+				p1 = p1.t();
+				
+/*				{
+					let i2 = 0;
+					let i3 = 0;
+					p0.resize(tochki_posi);
+					p1.resize(tochki_posi);
+					for(let i = 0; i < k.tochki.length; i++) {
+						if(k.tochki[i].length == 2) {
+							const p_0 = k.tochki[i][0];
+							const p_1 = k.tochki[i][1];
+//							if(true) {
+							if(mask.ucharPtr(i2, 0)[0] == 1) {
+								p1.floatPtr(i3, 0)[0] = k.tochki[i][1].x;
+								p1.floatPtr(i3, 0)[1] = k.tochki[i][1].y;
+								p0.floatPtr(i3, 0)[0] = k.tochki[i][0].x;
+								p0.floatPtr(i3, 0)[1] = k.tochki[i][0].y;
+								k.tochki[i].pose_i = i3;
+								i3++;
+							};
+							i2++;
+						}
+					};
+					p0.resize(i3);
+					p1.resize(i3);
+					console.log('pose udalil', tochki_posi - i3);
+					tochki_posi = i3;
+				}*/
+				
+				const t_nach_tri = performance.now();
+				ir1 = cv.mat_mul(im, R);
+				it1 = cv.mat_mul(im, t);
+				pr1.floatPtr(0, 0)[0] = ir1.floatPtr(0, 0)[0]; pr1.floatPtr(0, 1)[0] = ir1.floatPtr(0, 1)[0]; pr1.floatPtr(0, 2)[0] = ir1.floatPtr(0, 2)[0]; pr1.floatPtr(0, 3)[0] = it1.floatPtr(0, 0)[0];
+				pr1.floatPtr(1, 0)[0] = ir1.floatPtr(1, 0)[0]; pr1.floatPtr(1, 1)[0] = ir1.floatPtr(1, 1)[0]; pr1.floatPtr(1, 2)[0] = ir1.floatPtr(1, 2)[0]; pr1.floatPtr(1, 3)[0] = it1.floatPtr(1, 0)[0];
+				pr1.floatPtr(2, 0)[0] = ir1.floatPtr(2, 0)[0]; pr1.floatPtr(2, 1)[0] = ir1.floatPtr(2, 1)[0]; pr1.floatPtr(2, 2)[0] = ir1.floatPtr(2, 2)[0]; pr1.floatPtr(2, 3)[0] = it1.floatPtr(2, 0)[0];
+
+				trp0.resize(p0.rows);
+				trp1.resize(p1.rows);
+				for(let i = 0; i < p0.rows; i++) {
+					trp0.floatPtr(i, 0)[0] = p0.floatPtr(i, 0)[0]; trp0.floatPtr(i, 0)[1] = p0.floatPtr(i, 0)[1];
+					trp1.floatPtr(i, 0)[0] = p1.floatPtr(i, 0)[0]; trp1.floatPtr(i, 0)[1] = p1.floatPtr(i, 0)[1];
+				};
+				cv.triangulatePoints(pr0, pr1, trp0, trp1, ps4d);
+//				console.log('tri', t.data32F);
+
+				for(let i = 0; i < ps4d.cols; i++) {
+					ps4d.floatPtr(0, i)[0] /= ps4d.floatPtr(3, i)[0];
+					ps4d.floatPtr(1, i)[0] /= ps4d.floatPtr(3, i)[0];
+					ps4d.floatPtr(2, i)[0] /= ps4d.floatPtr(3, i)[0];
+		//			console.log('ps4d', ps4d.doublePtr(0, i)[0], ps4d.doublePtr(1, i)[0], ps4d.doublePtr(2, i)[0]);
+				};
+				
+				for(let i = 0; i < k.tochki.length; i++) {
+					if(typeof(k.tochki[i].pose_i) != 'undefined') {
+						k.tochki[i].koor = {
+								x: ps4d.floatPtr(0, k.tochki[i].pose_i)[0], 
+								y: ps4d.floatPtr(1, k.tochki[i].pose_i)[0],
+								z: ps4d.floatPtr(2, k.tochki[i].pose_i)[0]
+							};
+					}
+				};
+				
+				
+				
+//				console.log('tri tochki', tochki_kol, ps4d.cols);
+
+				t_tek = performance.now();
+				console.log('tri=', t_tek - t_nach_tri);
+				
+				t_tek = performance.now();
+		//		console.log('obsh=', t_tek - t_nach);
+			}
+		} else {
+			ps3d.resize(k.tochki.length);
+			pp1.resize(k.tochki.length);
+			let i2 = 0;
+			for(let i = 0; i < k.tochki.length; i++) {
+				if(k.tochki[i].koor) {
+					ps3d.floatPtr(i2, 0)[0] = k.tochki[i].koor.x;
+					ps3d.floatPtr(i2, 0)[1] = k.tochki[i].koor.y;
+					ps3d.floatPtr(i2, 0)[2] = k.tochki[i].koor.z;
+					pp1.floatPtr(i2, 0)[0] = k.p.floatPtr(i)[0];
+					pp1.floatPtr(i2, 0)[1] = k.p.floatPtr(i)[1];
+					i2++;
+				};
+			};
+			ps3d.resize(i2);
+			pp1.resize(i2);
+			console.log('tochek solvePnPRansac', i2);
+			if(i2 >= 4) {
+				cv.solvePnPRansac(ps3d, pp1, im, dist0, Rvec64, t64);
+				Rvec64.convertTo(Rvec, cv.CV_32FC1);
+				t64.convertTo(t, cv.CV_32FC1);
+				cv.Rodrigues(Rvec, R);
+		
+				console.log('solvePnPRansac', t.data32F);
+			
+				for(let i = 0; i < kadri.length; i++) {
+					const ka = kadri[i];
+					for(let j = 0; j < ka.tochki.length; j++) {
+						if(typeof(ka.tochki[j].tkoor) == 'undefined') {
+							ka.tochki[j].tkoor = new Array(tposi.length);
+							for(let u = 0; u < ka.tochki[j].tkoor.length; u++)
+								ka.tochki[j].tkoor[u] = {x: -1, y: -1};
+						};
+						if(i == ka_i) {
+							ka.tochki[j].tkoor[tposi_i].x = ka.p.floatPtr(j)[0];
+							ka.tochki[j].tkoor[tposi_i].y = ka.p.floatPtr(j)[1];
+						} else {
+							ka.tochki[j].tkoor[tposi_i].x = -1;
+						}
+					}
+				};
+				if(tposi[tposi_i] == null)
+					tposi[tposi_i] = {Rvec: new cv.Mat(), t: new cv.Mat()};
+				Rvec.copyTo(tposi[tposi_i].Rvec);
+				t.copyTo(tposi[tposi_i].t);
+		//		console.log('tposi t', tposi[tposi_i].t.data32F);
+				
+				let tposi_i0 = tposi_i + 1;
+				if(tposi_i0 == tposi.length) tposi_i0 = 0;
+				if(tposi[tposi_i0] != null) {
+					const x = tposi[tposi_i].t.floatPtr(0)[0] - tposi[tposi_i0].t.floatPtr(0)[0];
+					const y = tposi[tposi_i].t.floatPtr(1)[0] - tposi[tposi_i0].t.floatPtr(1)[0];
+					const z = tposi[tposi_i].t.floatPtr(2)[0] - tposi[tposi_i0].t.floatPtr(2)[0];
+					const d = Math.sqrt(x * x + y * y + z * z);
+//					if(d > 1) {
+					if(false) {
+//					if(true) {
+						trp0.resize(k.tochki.length);
+						trp1.resize(k.tochki.length);
+						let i2 = 0;
+						for(let i = 0; i < k.tochki.length; i++) {
+//							if(typeof(k.tochki[i].koor) == 'undefined' && k.tochki[i].tkoor[tposi_i0].x != -1) {
+							if(k.tochki[i].tkoor[tposi_i0].x != -1) {
+								trp0.floatPtr(i2, 0)[0] = k.tochki[i].tkoor[tposi_i0].x; trp0.floatPtr(i2, 0)[1] = k.tochki[i].tkoor[tposi_i0].y;
+								trp1.floatPtr(i2, 0)[0] = k.tochki[i].tkoor[tposi_i].x; trp1.floatPtr(i2, 0)[1] = k.tochki[i].tkoor[tposi_i].y;
+								i2++;
+							};
+						};
+						if(i2 > 0) {
+							trp0.resize(i2);
+							trp1.resize(i2);
+							console.log('t tochka 0', k.tochki[0].tkoor);
+							cv.Rodrigues(tposi[tposi_i0].Rvec, R);
+							ir0 = cv.mat_mul(im, R);
+							it0 = cv.mat_mul(im, tposi[tposi_i0].t);
+							pr0.floatPtr(0, 0)[0] = ir0.floatPtr(0, 0)[0]; pr0.floatPtr(0, 1)[0] = ir0.floatPtr(0, 1)[0]; pr0.floatPtr(0, 2)[0] = ir0.floatPtr(0, 2)[0]; pr0.floatPtr(0, 3)[0] = it0.floatPtr(0, 0)[0];
+							pr0.floatPtr(1, 0)[0] = ir0.floatPtr(1, 0)[0]; pr0.floatPtr(1, 1)[0] = ir0.floatPtr(1, 1)[0]; pr0.floatPtr(1, 2)[0] = ir0.floatPtr(1, 2)[0]; pr0.floatPtr(1, 3)[0] = it0.floatPtr(1, 0)[0];
+							pr0.floatPtr(2, 0)[0] = ir0.floatPtr(2, 0)[0]; pr0.floatPtr(2, 1)[0] = ir0.floatPtr(2, 1)[0]; pr0.floatPtr(2, 2)[0] = ir0.floatPtr(2, 2)[0]; pr0.floatPtr(2, 3)[0] = it0.floatPtr(2, 0)[0];
+							cv.Rodrigues(tposi[tposi_i].Rvec, R);
+							ir1 = cv.mat_mul(im, R);
+							it1 = cv.mat_mul(im, tposi[tposi_i].t);
+							pr1.floatPtr(0, 0)[0] = ir1.floatPtr(0, 0)[0]; pr1.floatPtr(0, 1)[0] = ir1.floatPtr(0, 1)[0]; pr1.floatPtr(0, 2)[0] = ir1.floatPtr(0, 2)[0]; pr1.floatPtr(0, 3)[0] = it1.floatPtr(0, 0)[0];
+							pr1.floatPtr(1, 0)[0] = ir1.floatPtr(1, 0)[0]; pr1.floatPtr(1, 1)[0] = ir1.floatPtr(1, 1)[0]; pr1.floatPtr(1, 2)[0] = ir1.floatPtr(1, 2)[0]; pr1.floatPtr(1, 3)[0] = it1.floatPtr(1, 0)[0];
+							pr1.floatPtr(2, 0)[0] = ir1.floatPtr(2, 0)[0]; pr1.floatPtr(2, 1)[0] = ir1.floatPtr(2, 1)[0]; pr1.floatPtr(2, 2)[0] = ir1.floatPtr(2, 2)[0]; pr1.floatPtr(2, 3)[0] = it1.floatPtr(2, 0)[0];
+							console.log('retri t0 t', tposi[tposi_i0].t.data32F, tposi[tposi_i].t.data32F);
+							cv.triangulatePoints(pr0, pr1, trp0, trp1, ps4d);
+							i2 = 0;
+							for(let i = 0; i < k.tochki.length; i++) {
+//								if(typeof(k.tochki[i].koor) == 'undefined' && k.tochki[i].tkoor[tposi_i0].x != -1) {
+								if(k.tochki[i].tkoor[tposi_i0].x != -1) {
+									let x = ps4d.floatPtr(0, i2)[0] / ps4d.floatPtr(3, i2)[0];
+									let y = ps4d.floatPtr(1, i2)[0] / ps4d.floatPtr(3, i2)[0];
+									let z = ps4d.floatPtr(2, i2)[0] / ps4d.floatPtr(3, i2)[0];
+									if(typeof(k.tochki[i].koor) == 'undefined')
+										k.tochki[i].koor = {x: x, y: y, z: z};
+									else {
+										k.tochki[i].koor.x = (k.tochki[i].koor.x + x) / 2;
+										k.tochki[i].koor.y = (k.tochki[i].koor.y + y) / 2;
+										k.tochki[i].koor.z = (k.tochki[i].koor.z + z) / 2;
+/*										k.tochki[i].koor.x = x;
+										k.tochki[i].koor.y = y;
+										k.tochki[i].koor.z = z;*/
+									}
+									i2++;
+								};
+							};
+							console.log('re tri', i2);
+						}
+					}
+				};
+				tposi_i++;
+				if(tposi_i == tposi.length) tposi_i = 0;
+			}
+		}
+
+		t_tek = performance.now();
+		const fps = Math.round(1000 / (t_tek - t_nach));
+		_$('.fps span').innerHTML = fps;
+//		_$('.rot span').innerHTML = R.data64F;
+
+//		if(false) {
+		if(est_posa) {
+			let s = t.data32F[0].toFixed(1) + ', ';
+			s += t.data32F[1].toFixed(1) + ', ';
+			s += t.data32F[2].toFixed(1);
+			_$('.trans span').innerHTML = s;
+			tv_ctx.clearRect(0, 0, tv_canv.width, tv_canv.height);
+			tv_ctx.beginPath();
+			tv_ctx.fillRect(100 + t.data32F[0] * 15, 100 + t.data32F[1] * 15, 3, 3);
+//			tv_ctx.fillRect(100 + t.data32F[0] * 5, 100 + t.data32F[1] * 5, 3, 3);
+			console.log('cam', t.floatPtr(0, 0)[0].toFixed(1), t.floatPtr(1, 0)[0].toFixed(1), t.floatPtr(2, 0)[0].toFixed(1));
+
+			{
+/*				const x = 30 * Math.PI / 180;
+				  const y = 45 * Math.PI / 180;
+				  const z = 00 * Math.PI / 180;
+
+				  let m00, m01, m02, m10, m11, m12, m20, m21, m22;
+
+				const a = Math.cos( x ), b = Math.sin( x );
+				const c = Math.cos( y ), d = Math.sin( y );
+				const e = Math.cos( z ), f = Math.sin( z );
+
+				const ae = a * e, af = a * f, be = b * e, bf = b * f;
+
+				m00 = c * e;
+				m01 = - c * f;
+				m02 = d;
+
+				m10 = af + be * d;
+				m11 = ae - bf * d;
+				m12 = - b * c;
+
+				m20 = bf - ae * d;
+				m21 = be + af * d;
+				m22 = a * c;
+				  
+				  R.floatPtr(0,0)[0] = m00; R.floatPtr(0,1)[0] = m01;  R.floatPtr(0,2)[0] = m02; 
+				  R.floatPtr(1,0)[0] = m10; R.floatPtr(1,1)[0] = m11;  R.floatPtr(1,2)[0] = m12; 
+				  R.floatPtr(2,0)[0] = m20; R.floatPtr(2,1)[0] = m21;  R.floatPtr(2,2)[0] = m22; 
+				  t.floatPtr(0,0)[0] = -5; t.floatPtr(0,1)[0] = 2;  t.floatPtr(0,2)[0] = 0; 
+*/			
+				calc_cv_mat(orient);
+				R = cv.mat_mul(R, R0inv);
+//				sensorar.mir_mat(mir_mat);
+/*				t.floatPtr(0,0)[0] = 0; t.floatPtr(0,1)[0] = 0;  t.floatPtr(0,2)[0] = 0;
+				
+				R2.floatPtr(0,0)[0] = 1; R2.floatPtr(0,1)[0] = 0; R2.floatPtr(0,2)[0] = 0; R2.floatPtr(0,3)[0] = 0;
+				R2.floatPtr(1,0)[0] = 0; R2.floatPtr(1,1)[0] = 1; R2.floatPtr(1,2)[0] = 0; R2.floatPtr(1,3)[0] = 0;
+				R2.floatPtr(2,0)[0] = 0; R2.floatPtr(2,1)[0] = 0; R2.floatPtr(2,2)[0] = 1; R2.floatPtr(2,3)[0] = 5;
+				R2.floatPtr(3,0)[0] = 0; R2.floatPtr(3,1)[0] = 0; R2.floatPtr(3,2)[0] = 0; R2.floatPtr(3,3)[0] = 1;
+				R3.floatPtr(0,0)[0] = R.floatPtr(0,0)[0]; R3.floatPtr(0,1)[0] = R.floatPtr(0,1)[0]; R3.floatPtr(0,2)[0] = R.floatPtr(0,2)[0]; R3.floatPtr(0,3)[0] = 0;
+				R3.floatPtr(1,0)[0] = R.floatPtr(1,0)[0]; R3.floatPtr(1,1)[0] = R.floatPtr(1,1)[0]; R3.floatPtr(1,2)[0] = R.floatPtr(1,2)[0]; R3.floatPtr(1,3)[0] = 0;
+				R3.floatPtr(2,0)[0] = R.floatPtr(2,0)[0]; R3.floatPtr(2,1)[0] = R.floatPtr(2,1)[0]; R3.floatPtr(2,2)[0] = R.floatPtr(2,2)[0]; R3.floatPtr(2,3)[0] = 0;
+				R3.floatPtr(3,0)[0] = 0; R3.floatPtr(3,1)[0] = 0; R3.floatPtr(3,2)[0] = 0; R3.floatPtr(3,3)[0] = 1;
+				R3 = cv.mat_mul(R2, R3);
+				R4.floatPtr(0,0)[0] = R3.floatPtr(0,0)[0]; R4.floatPtr(0,1)[0] = R3.floatPtr(0,1)[0]; R4.floatPtr(0,2)[0] = R3.floatPtr(0,2)[0];
+				R4.floatPtr(1,0)[0] = R3.floatPtr(1,0)[0]; R4.floatPtr(1,1)[0] = R3.floatPtr(1,1)[0]; R4.floatPtr(1,2)[0] = R3.floatPtr(1,2)[0];
+				R4.floatPtr(2,0)[0] = R3.floatPtr(2,0)[0]; R4.floatPtr(2,1)[0] = R3.floatPtr(2,1)[0]; R4.floatPtr(2,2)[0] = R3.floatPtr(2,2)[0];
+				t0.floatPtr(0,0)[0] = R3.floatPtr(0,3)[0];
+				t0.floatPtr(0,1)[0] = R3.floatPtr(1,3)[0];
+				t0.floatPtr(0,2)[0] = R3.floatPtr(2,3)[0];*/
+				t0.floatPtr(0,0)[0] = 0; t0.floatPtr(0,1)[0] = 0;  t0.floatPtr(0,2)[0] = 5;
+			
+				const dlina = 2;
+				const shir = 0.3;
+				const az = 0;
+				ps3d.resize(12);
+				ps3d.floatPtr(0, 0)[0] = 0; ps3d.floatPtr(0, 0)[1] = 0; ps3d.floatPtr(0, 0)[2] = az;
+				ps3d.floatPtr(1, 0)[0] = dlina; ps3d.floatPtr(1, 0)[1] = 0; ps3d.floatPtr(1, 0)[2] = az;
+				ps3d.floatPtr(2, 0)[0] = dlina; ps3d.floatPtr(2, 0)[1] = shir; ps3d.floatPtr(2, 0)[2] = az;
+				ps3d.floatPtr(3, 0)[0] = 0; ps3d.floatPtr(3, 0)[1] = shir; ps3d.floatPtr(3, 0)[2] = az;
+				ps3d.floatPtr(4, 0)[0] = 0; ps3d.floatPtr(4, 0)[1] = 0; ps3d.floatPtr(4, 0)[2] = az;
+				ps3d.floatPtr(5, 0)[0] = 0; ps3d.floatPtr(5, 0)[1] = dlina; ps3d.floatPtr(5, 0)[2] = az;
+				ps3d.floatPtr(6, 0)[0] = shir; ps3d.floatPtr(6, 0)[1] = dlina; ps3d.floatPtr(6, 0)[2] = az;
+				ps3d.floatPtr(7, 0)[0] = shir; ps3d.floatPtr(7, 0)[1] = 0; ps3d.floatPtr(7, 0)[2] = az;
+				ps3d.floatPtr(8, 0)[0] = 0; ps3d.floatPtr(8, 0)[1] = 0; ps3d.floatPtr(8, 0)[2] = az;
+				ps3d.floatPtr(9, 0)[0] = 0; ps3d.floatPtr(9, 0)[1] = 0; ps3d.floatPtr(9, 0)[2] = az + dlina;
+				ps3d.floatPtr(10, 0)[0] = shir; ps3d.floatPtr(10, 0)[1] = 0; ps3d.floatPtr(10, 0)[2] = az + dlina;
+				ps3d.floatPtr(11, 0)[0] = shir; ps3d.floatPtr(11, 0)[1] = 0; ps3d.floatPtr(11, 0)[2] = az;
+				cv.Rodrigues(R, Rvec);
+				cv.projectPoints(ps3d, Rvec, t0, im, dist0, pp1);
+				const to = ts.get(0);
+				to.intPtr(0, 0)[0] = pp1.floatPtr(0, 0)[0]; to.intPtr(0, 1)[0] = pp1.floatPtr(0, 0)[1];
+				to.intPtr(1, 0)[0] = pp1.floatPtr(1, 0)[0]; to.intPtr(1, 1)[0] = pp1.floatPtr(1, 0)[1];
+				to.intPtr(2, 0)[0] = pp1.floatPtr(2, 0)[0]; to.intPtr(2, 1)[0] = pp1.floatPtr(2, 0)[1];
+				to.intPtr(3, 0)[0] = pp1.floatPtr(3, 0)[0]; to.intPtr(3, 1)[0] = pp1.floatPtr(3, 0)[1];
+				zvet[0] = 255; zvet[1] = 0;  zvet[2] = 0;  zvet[3] = 255;
+				cv.fillPoly(mat, ts, zvet);
+				to.intPtr(0, 0)[0] = pp1.floatPtr(4, 0)[0]; to.intPtr(0, 1)[0] = pp1.floatPtr(4, 0)[1];
+				to.intPtr(1, 0)[0] = pp1.floatPtr(5, 0)[0]; to.intPtr(1, 1)[0] = pp1.floatPtr(5, 0)[1];
+				to.intPtr(2, 0)[0] = pp1.floatPtr(6, 0)[0]; to.intPtr(2, 1)[0] = pp1.floatPtr(6, 0)[1];
+				to.intPtr(3, 0)[0] = pp1.floatPtr(7, 0)[0]; to.intPtr(3, 1)[0] = pp1.floatPtr(7, 0)[1];
+				zvet[0] = 0; zvet[1] = 255;  zvet[2] = 0;  zvet[3] = 255; 
+				cv.fillPoly(mat, ts, zvet);
+				zvet[0] = 0; zvet[1] = 0;  zvet[2] = 255;  zvet[3] = 255; 
+				to.intPtr(0, 0)[0] = pp1.floatPtr(8, 0)[0]; to.intPtr(0, 1)[0] = pp1.floatPtr(8, 0)[1];
+				to.intPtr(1, 0)[0] = pp1.floatPtr(9, 0)[0]; to.intPtr(1, 1)[0] = pp1.floatPtr(9, 0)[1];
+				to.intPtr(2, 0)[0] = pp1.floatPtr(10, 0)[0]; to.intPtr(2, 1)[0] = pp1.floatPtr(10, 0)[1];
+				to.intPtr(3, 0)[0] = pp1.floatPtr(11, 0)[0]; to.intPtr(3, 1)[0] = pp1.floatPtr(11, 0)[1];
+				cv.fillPoly(mat, ts, zvet);
+//				cv.drawFrameAxes(mat, im, dist0, Rvec, t, dlina / 2);
+				ctx2.putImageData(imgdata(mat), 0, 0);
+			}
+			
+			const sc = 1;
+			t.floatPtr(0,0)[0] = 0; t.floatPtr(0,1)[0] = 0;  t.floatPtr(0,2)[0] = 0;
+			mir_mat.set(
+				R.floatPtr(0, 0)[0], R.floatPtr(0, 1)[0], R.floatPtr(0, 2)[0], t.floatPtr(0)[0] * sc,
+				-R.floatPtr(1, 0)[0], -R.floatPtr(1, 1)[0], -R.floatPtr(1, 2)[0], -t.floatPtr(1)[0] * sc,
+				-R.floatPtr(2, 0)[0], -R.floatPtr(2, 1)[0], -R.floatPtr(2, 2)[0], -t.floatPtr(2)[0] * sc,
+				0, 0, 0, 1);
+			sensorar.mir_mat(mir_mat);
+		};
+
+/*
+TODO:
+0. Возможно быстрее будет подбирать tx,ty,tz методом ветвей и границ (подбором).
+1. Мой calc_pose на iPhone вроде работает немного лучше recoverPose, но тоже
+	часто ошибается.
+2. Работает медленно и скорее всего пропускает кадры. Возможно надо перейти обратно к FAST
+3. Может все таки как-то использовать ускорение с датчика? Возможно совместно с данными с камеры
+4. Чтобы все это проверять на компе надо наверное записать видео со встроенным штрихкодом,
+сожержащим текущие углы ориентации, а потом его читать.
+5. 
+6. 
+7. 
+8. 
+9. 
+10. Сделать стадию добавления и триангуляции новых точек после est_posa
+
+
+
+1. 
+2. 
+3. 
+4. 
+*/
+
+
+
+//		ir1.delete();
+//		it1.delete();
+	
+//		p1.delete();
+//		p0.delete();
+
+		
+	} else {
+		perv = false;
+	}
+	const m = mat0;
+	mat0 = mat1;
+	mat1 = m;
+	const p = p0;
+	p0 = p1;
+	p1 = p;
+	const kp_ = kp0;
+	kp0 = kp1;
+	kp1 = kp_;
+	const desc_ = desc0;
+	desc0 = desc1;
+	desc1 = desc_;
+	if(++ka_i == kadri.length) ka_i = 0;
+
+	window.requestAnimationFrame(anim);
+//	vid.requestVideoFrameCallback(anim);
+};
+
+function stop(evt) {
+	window.cancelAnimationFrame(anim);
+	evt.preventDefault();
+	
+	ostan = true;
+
+	ps4d.delete();
+	ps3d.delete();
+	trp0.delete();
+	trp1.delete();
+	pr1.delete();
+	pr0.delete();
+	pp1.delete();
+	pp0.delete();
+	ir0.delete();
+	it0.delete();
+	im.delete();
+	r0.delete();
+	t0.delete();
+	Rvec64.delete();
+	Rvec.delete();
+	R64.delete();
+	R.delete();
+	R2.delete();
+	R3.delete();
+	R4.delete();
+	t64.delete();
+	t.delete();
+	E.delete();
+	
+	dmv.delete();
+	bf.delete();
+	kp.delete();
+	kp0.delete();
+	kp1.delete();
+	desc.delete();
+	desc0.delete();
+	desc1.delete();
+	mask.delete();
+	orb.delete();
+	
+	status.delete();
+	err.delete();
+	if(typeof(fast) != 'undefined')
+		fast.delete();
+	p1.delete();
+	p0.delete();
+	mat1.delete();
+	mat0.delete();
+	mat.delete();
+	
+	ts.delete();
+}
+
+function calc_pose(p0, p1, R, t) {
+	const Rkam = new cv.Mat(3, 3, cv.CV_32FC1);
+	cv.invert(R, Rkam);
+//	let Rkam = R;
+	const k_inv = new cv.Mat(3, 3, cv.CV_32FC1);
+	cv.invert(im, k_inv);
+	const k_inv_t = k_inv.t();
+	const RK_inv = cv.mat_mul(Rkam, k_inv);
+	const u1 = new cv.Mat(1, 3, cv.CV_32FC1);
+	const u2 = new cv.Mat(3, 1, cv.CV_32FC1);
+	const m = new cv.Mat(p0.rows, 3, cv.CV_32FC1);
+	for(let i = 0; i < m.rows; i++) {
+		u1.floatPtr(0, 0)[0] = p0.floatPtr(i, 0)[0];
+		u1.floatPtr(0, 1)[0] = p0.floatPtr(i, 0)[1];
+		u1.floatPtr(0, 2)[0] = 1;
+		u2.floatPtr(0, 0)[0] = p1.floatPtr(i, 0)[0];
+		u2.floatPtr(1, 0)[0] = p1.floatPtr(i, 0)[1];
+		u2.floatPtr(2, 0)[0] = 1;
+//		console.log('u1:' + i, u1.data32F, u2.data32F);
+		const a = cv.mat_mul(u1, k_inv_t);
+		const b = cv.mat_mul(RK_inv, u2);
+		const [a1, a2, a3] = a.data32F;
+		const [b1, b2, b3] = b.data32F;
+		m.floatPtr(i, 0)[0] = a3 * b2 - a2 * b3;
+		m.floatPtr(i, 1)[0] = a1 * b3 - a3 * b1;
+		m.floatPtr(i, 2)[0] = a2 * b1 - a1 * b2;
+	};
+//	console.log('m', m.data32F);
+	const t1 = new cv.Mat();
+	const m2 = new cv.Mat(7, 3, cv.CV_32FC1);
+	const t_kam = new cv.Mat(3, 1, cv.CV_32FC1);
+	let max = 0;
+	let max_ind;
+	for(let it = 0; it < 20; it++) {
+		const ind = new Array(7);
+		for(let i = 0; i < ind.length; i++) {
+			let j;
+			do {
+				ind[i] = Math.round(Math.random() * m.rows);
+				j = 0;
+				for(; j < i && ind[j] != ind[i]; j++);
+			} while(j < i);
+		};
+		
+		for(let i = 0; i < ind.length; i++) {
+			m2.floatPtr(i, 0)[0] = m.floatPtr(ind[i], 0)[0];
+			m2.floatPtr(i, 1)[0] = m.floatPtr(ind[i], 1)[0];
+			m2.floatPtr(i, 2)[0] = m.floatPtr(ind[i], 2)[0];
+		};
+		cv.svd_solvez(m2, t1);
+//		console.log('ind', ind, t1.data32F);
+//		console.log('m2', m2.data32F, t1.data32F);
+//		console.log('t1', t1.data32F);
+		let hor = 0;
+		for(let i = 0; i < m.rows; i++) {
+			const rez = m.floatPtr(i, 0)[0] * t1.floatPtr(0, 0)[0] +
+						m.floatPtr(i, 1)[0] * t1.floatPtr(1, 0)[0] +
+						m.floatPtr(i, 2)[0] * t1.floatPtr(2, 0)[0];
+			if(Math.abs(rez) < 0.01) hor++;
+		};
+//		console.log('hor', hor);
+		if(hor > max) {
+			t_kam.data32F.set(t1.data32F);
+			max = hor;
+			max_ind = ind;
+		};
+	};
+
+//	const t_kam = new cv.Mat();
+//	cv.svd_solvez(m, t_kam);
+//	console.log('t_kam', t_kam.data32F);
+	//Перевод вектора трансляции камеры в вектор трансляции объекта t_o = -Ro * t_kam
+	const to_minus = cv.mat_mul(R, t_kam);
+	t.floatPtr(0, 0)[0] = -to_minus.floatPtr(0, 0)[0];
+	t.floatPtr(1, 0)[0] = -to_minus.floatPtr(1, 0)[0];
+	t.floatPtr(2, 0)[0] = -to_minus.floatPtr(2, 0)[0];
+	ir1 = cv.mat_mul(im, R);
+	it1 = cv.mat_mul(im, t);
+	pr1.floatPtr(0, 0)[0] = ir1.floatPtr(0, 0)[0]; pr1.floatPtr(0, 1)[0] = ir1.floatPtr(0, 1)[0]; pr1.floatPtr(0, 2)[0] = ir1.floatPtr(0, 2)[0]; pr1.floatPtr(0, 3)[0] = it1.floatPtr(0, 0)[0];
+	pr1.floatPtr(1, 0)[0] = ir1.floatPtr(1, 0)[0]; pr1.floatPtr(1, 1)[0] = ir1.floatPtr(1, 1)[0]; pr1.floatPtr(1, 2)[0] = ir1.floatPtr(1, 2)[0]; pr1.floatPtr(1, 3)[0] = it1.floatPtr(1, 0)[0];
+	pr1.floatPtr(2, 0)[0] = ir1.floatPtr(2, 0)[0]; pr1.floatPtr(2, 1)[0] = ir1.floatPtr(2, 1)[0]; pr1.floatPtr(2, 2)[0] = ir1.floatPtr(2, 2)[0]; pr1.floatPtr(2, 3)[0] = it1.floatPtr(2, 0)[0];
+	cv.triangulatePoints(pr0, pr1, p0, p1, ps4d);
+/*	for(let i = 0; i < ps4d.cols; i++) {
+		ps4d.floatPtr(0, i)[0] /= ps4d.floatPtr(3, i)[0];
+		ps4d.floatPtr(1, i)[0] /= ps4d.floatPtr(3, i)[0];
+		ps4d.floatPtr(2, i)[0] /= ps4d.floatPtr(3, i)[0];
+	};*/
+//	console.log('ps4d', ps4d.data32F);
+	
+	if(ps4d.floatPtr(0, 0)[0] / ps4d.floatPtr(3, 0)[0] < 0) {
+		t.floatPtr(0, 0)[0] = -t.floatPtr(0, 0)[0];
+		t.floatPtr(1, 0)[0] = -t.floatPtr(1, 0)[0];
+		t.floatPtr(2, 0)[0] = -t.floatPtr(2, 0)[0];
+	}
+	console.log('calc_pose', t.data32F);
+
+/*	t.floatPtr(0, 0)[0] = t_kam.floatPtr(0, 0)[0];
+	t.floatPtr(1, 0)[0] = t_kam.floatPtr(1, 0)[0];
+	t.floatPtr(2, 0)[0] = t_kam.floatPtr(2, 0)[0];*/
+	return max_ind;
+}
+
+function test() {
+/*	const src1 = new cv.Mat(2, 2, cv.CV_32FC1);
+	src1.floatPtr(0, 0)[0] = 1; src1.floatPtr(0, 1)[0] = 2;
+	src1.floatPtr(1, 0)[0] = 3; src1.floatPtr(1, 1)[0] = 4;
+	const src2 = new cv.Mat(2, 1, cv.CV_32FC1);
+	src2.floatPtr(0, 0)[0] = 5;
+	src2.floatPtr(1, 0)[0] = 6;*/
+//	const dst = new cv.Mat();
+//	cv.solve(src1, src2, dst, cv.DECOMP_SVD);
+//	const dst = new cv.Mat(2, 1, cv.CV_32FC1);
+//	sdot(src1, src2, dst);
+/*	const src3 = new cv.Mat(1, 3, cv.CV_32FC1);
+	src3.floatPtr(0, 0)[0] = 2;
+	src3.floatPtr(0, 1)[0] = 5;
+	src3.floatPtr(0, 2)[0] = 10;
+	const dst = new cv.Mat(3, 3, cv.CV_32FC1);
+	invdiag(src3, dst);*/
+/*	const A = new cv.Mat(3, 3, cv.CV_32FC1);
+	A.floatPtr(0, 0)[0] = -7; A.floatPtr(0, 1)[0] = 1; A.floatPtr(0, 2)[0] = -3;
+	A.floatPtr(1, 0)[0] = 4; A.floatPtr(1, 1)[0] = 3; A.floatPtr(1, 2)[0] = -8;
+	A.floatPtr(2, 0)[0] = 5; A.floatPtr(2, 1)[0] = -4; A.floatPtr(2, 2)[0] = -9;
+	const B = new cv.Mat(3, 1, cv.CV_32FC1);
+	B.floatPtr(0, 0)[0] = 5;
+	B.floatPtr(1, 0)[0] = 2;
+	B.floatPtr(2, 0)[0] = 1;
+*/
+/*	const A = new cv.Mat(3, 3, cv.CV_32FC1);
+	A.floatPtr(0, 0)[0] = 1; A.floatPtr(0, 1)[0] = 1; A.floatPtr(0, 2)[0] = -1;
+	A.floatPtr(1, 0)[0] = -1; A.floatPtr(1, 1)[0] = 1; A.floatPtr(1, 2)[0] = 1;
+	A.floatPtr(2, 0)[0] = 1; A.floatPtr(2, 1)[0] = 2; A.floatPtr(2, 2)[0] = 1;
+	const B = new cv.Mat(3, 1, cv.CV_32FC1);
+	B.floatPtr(0, 0)[0] = 1;
+	B.floatPtr(1, 0)[0] = 0;
+	B.floatPtr(2, 0)[0] = 2;
+	const X = new cv.Mat(3, 1, cv.CV_32FC1);
+	lin_svd(A, B, X);
+	console.log('X', X.rows, X.cols, X.data32F);*/
+	
+	const p = new cv.Mat(7, 3, cv.CV_32FC1);
+/*	p.floatPtr(0, 0)[0] = 0.5; p.floatPtr(0, 1)[0] = 0.3; p.floatPtr(0, 2)[0] = 0.6;
+	p.floatPtr(1, 0)[0] = 0.2; p.floatPtr(1, 1)[0] = -0.2; p.floatPtr(1, 2)[0] = 0.4;
+	p.floatPtr(2, 0)[0] = -0.8; p.floatPtr(2, 1)[0] = -0.8; p.floatPtr(2, 2)[0] = 0.8;*/
+//	p.data32F.set([ 0.5, 0.3, 1.6]);
+	p.data32F.set([ 0.5, 0.3, 1.6,
+					0.2, -0.2, 1.4,
+					0.9, -0.8, 1.7,
+					0.4, -0.7, 1.3,
+					-0.1, 0.4, 1.1,
+					-0.6, 0.3, 1.9,
+					-0.5, -0.2, 1.3]);
+	console.log('p', p.data32F);
+	R.data32F.set([1, 0, 0,
+					0, 1, 0,
+					0, 0, 1]);
+	console.log('R', R.data32F);
+	cv.Rodrigues(R, Rvec);
+	console.log('Rvec', Rvec.data32F);
+	t.data32F.set([0, 0, 0]);
+	console.log('t', t.data32F);
+	const p0 = new cv.Mat();
+	const dist = new cv.Mat(1, 5, cv.CV_32FC1);
+	dist.data32F.set([0, 0, 0, 0, 0]);
+	console.log('dist', dist.data32F);
+//	im.data32F.set([1,0,0,0,1,0,0,0,1]);
+	console.log('im', im.data32F);
+	cv.projectPoints(p, Rvec, t, im, dist, p0);
+	console.log('p0', p0.rows, p0.cols, p0.type(), p0.data32F);
+//	const ax = 100 * Math.PI / 180;
+	const ax = 0 * Math.PI / 180;
+	R.data32F.set([1, 0, 0,
+					0, Math.cos(ax), -Math.sin(ax),
+					0, Math.sin(ax), Math.cos(ax)]);
+//	const ay = 15 * Math.PI / 180;
+	const ay = 0 * Math.PI / 180;
+	const R2 = new cv.Mat(3, 3, cv.CV_32FC1);
+	R2.data32F.set([Math.cos(ay), 0, Math.sin(ay),
+					0, 1, 0,
+					-Math.sin(ay), 0, Math.cos(ay)]);
+	R = cv.mat_mul(R, R2);
+	cv.Rodrigues(R, Rvec);
+	console.log('R', R.data32F);
+	console.log('Rvec', Rvec.data32F);
+//	t.data32F.set([0, -0.4, -0.4]);
+//	t.data32F.set([0, 0, 1.3]);
+//	t.data32F.set([-0.8, 0.5, 1.4]);
+	t.data32F.set([0.8, 0, 0]);
+	const p1 = new cv.Mat();
+	cv.projectPoints(p, Rvec, t, im, dist, p1);
+	console.log('p1', p1.rows, p1.cols, p1.type(), p1.data32F);
+	const R0 = new cv.Mat();
+	const t0 = new cv.Mat();
+	E = new cv.Mat(3, 3, cv.CV_32FC1);
+	mask = new cv.Mat();
+	cv.recoverPose(p0, p1, im, dist, im, dist, E, R64, t64, cv.RANSAC, 0.999, 1, mask);
+	R64.convertTo(R0, cv.CV_32FC1);
+	t64.convertTo(t0, cv.CV_32FC1);
+	console.log('R0', R0.data32F);
+	console.log('t0', t0.data32F);
+	const t1 = new cv.Mat(3, 1, cv.CV_32FC1);
+	calc_pose(p0, p1, R, t1);
+	console.log('t1', t1.data32F);
+/*	const im_inv = new cv.Mat();
+	cv.invert(im, im_inv);
+	const p0 = new cv.Mat(3, 1, cv.CV_32FC1);
+	p0.data32F.set([0.5, 0.3, 0.6]);
+	const p1 = cv.mat_mul(im, p0);
+	console.log('p1', p1.data32F);*/
+}
+
+function lin_svd(A, B, X) {
+	const w = new cv.Mat();
+	const u = new cv.Mat();
+	const vt = new cv.Mat();
+	cv.svd_compute(A, w, u, vt);
+	console.log('w', w.rows, w.cols, w.data32F);
+	console.log('u', u.rows, u.cols, u.data32F);
+	console.log('vt', vt.rows, vt.cols, vt.data32F);
+	const w_inv = new cv.Mat(A.cols, A.cols, A.type());
+	invdiag(w, w_inv);
+	console.log('w_inv', w_inv.data32F);
+	const x1 = new cv.Mat(A.cols, 1, A.type());
+	sdot(u.t(), B, x1);
+	console.log('x1', x1.data32F);
+	const x2 = new cv.Mat(A.cols, 1, A.type());
+	sdot(w_inv, x1, x2);
+	console.log('x2', x2.data32F);
+	sdot(vt.t(), x2, X);
+}
+
+function eul_rot(R) {
+	const eul = {x:0, y:0, z:0};
+	eul.y = Math.asin(R.floatPtr(0, 3)[0]);
+	eul.x = Math.atan2( - R.floatPtr(1, 2)[0], R.floatPtr(2, 2)[0] );
+	eul.z = Math.atan2( - R.floatPtr(0, 1)[0], R.floatPtr(0, 0)[0] );
+	eul.x *= 180 / Math.PI;
+	eul.y *= 180 / Math.PI;
+	eul.z *= 180 / Math.PI;
+	return eul;
+}
+
+/*
+def solve_svd2(A,b):
+    u,s,vt = svd(A)
+    print("s\n",s)
+    print("u\n",u)
+    print("vt\n",vt)
+    s = 1 / s
+    
+    m,n = A.shape
+    s_inv = diagsvd(s,m,n).T
+    print("s_inv\n",s_inv)
+    x1 = u.T.dot(b)
+    print("x1\n", x1)
+    x2 = s_inv.dot(x1)
+    print("x2\n", x2)
+    x = vt.T.dot(x2)
+    return x
+*/
+
+/*
+def solve_svd(A,b):
+    # compute svd of A
+    U,s,Vh = svd(A)
+
+    print("U\n",U)
+    print("s\n",s)
+
+    # U diag(s) Vh x = b <=> diag(s) Vh x = U.T b = c
+    c = np.dot(U.T,b)
+    print("UT\n", U.T)
+    print("c\n", c)   
+
+    # diag(s) Vh x = c <=> Vh x = diag(1/s) c = w (trivial inversion of a diagonal matrix)
+    w = np.dot(np.diag(1/s),c)
+    # Vh x = w <=> x = Vh.H w (where .H stands for hermitian = conjugate transpose)
+    x = np.dot(Vh.conj().T,w)
+    return x
+*/
+
+/*
+Решение гомогенной СЛАУ в numpy:
+A = np.array([[-0.75,  0.25,  0.25,  0.25],
+       [ 1.  , -1.  ,  0.  ,  0.  ],
+       [ 1.  ,  0.  , -1.  ,  0.  ],
+       [ 1.  ,  0.  ,  0.  , -1.  ]])
+	   
+_, _, V = np.linalg.svd(A, full_matrices=True)
+X = V[-1]
+X = array([-0.5, -0.5, -0.5, -0.5])
+Проверка:
+A.dot(X) = array([-8.32667268e-17,  1.11022302e-16,  5.55111512e-17,  5.55111512e-17])
+*/
+
+function sdot(M1, M2, M3) {
+	M3.resize(M1.rows);
+	for(let i = 0; i < M3.rows; i++) {
+		M3.floatPtr(i, 0)[0] = M1.row(i).dot(M2.t());
+	}
+}
+
+function invdiag(M1, M2) {
+	for(let i = 0; i < M1.rows; i++) {
+		for(let j = 0; j < M1.rows; j++)
+			M2.floatPtr(i, j)[0] = i == j ? 1 / M1.floatPtr(i, 0)[0] : 0;
+	}
+}
+
+var Module = {
+  // https://emscripten.org/docs/api_reference/module.html#Module.onRuntimeInitialized
+  onRuntimeInitialized() {
+//	window.cv = Module;
+    document.getElementById('status').innerHTML = 'OpenCV.js is ready.';
+	loaded();
+  }
+};
+</script>
+<script async src="opencv.js" type="text/javascript"></script>
+</body>
+</html>
